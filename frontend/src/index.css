@@ -1,0 +1,170 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+
+@layer base {
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #e0e5ec;
+    color: #3a4154;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+}
+
+@layer utilities {
+  /* ─── Neumorphic raised surface ─── */
+  .neu-card {
+    background: #e0e5ec;
+    border-radius: 20px;
+    box-shadow:
+      9px 9px 16px rgba(163, 177, 198, 0.6),
+      -9px -9px 16px rgba(255, 255, 255, 0.5);
+    padding: 2rem;
+  }
+
+  /* ─── Neumorphic inset / well ─── */
+  .neu-inset {
+    background: #e0e5ec;
+    border-radius: 14px;
+    box-shadow:
+      inset 5px 5px 10px rgba(163, 177, 198, 0.5),
+      inset -5px -5px 10px rgba(255, 255, 255, 0.5);
+  }
+
+  /* ─── Input fields ─── */
+  .neu-input {
+    width: 100%;
+    background: #e0e5ec;
+    border: none;
+    border-radius: 12px;
+    padding: 0.75rem 1rem;
+    font-size: 0.9rem;
+    color: #3a4154;
+    box-shadow:
+      inset 4px 4px 8px rgba(163, 177, 198, 0.45),
+      inset -4px -4px 8px rgba(255, 255, 255, 0.45);
+    outline: none;
+    transition: box-shadow 0.25s ease;
+  }
+  .neu-input::placeholder {
+    color: #8a95a8;
+  }
+  .neu-input:focus {
+    box-shadow:
+      inset 4px 4px 8px rgba(163, 177, 198, 0.55),
+      inset -4px -4px 8px rgba(255, 255, 255, 0.55),
+      0 0 0 3px rgba(99, 102, 241, 0.2);
+  }
+
+  /* ─── Select dropdown ─── */
+  .neu-select {
+    width: 100%;
+    background: #e0e5ec;
+    border: none;
+    border-radius: 12px;
+    padding: 0.75rem 1rem;
+    font-size: 0.9rem;
+    color: #3a4154;
+    box-shadow:
+      inset 4px 4px 8px rgba(163, 177, 198, 0.45),
+      inset -4px -4px 8px rgba(255, 255, 255, 0.45);
+    outline: none;
+    -webkit-appearance: none;
+    cursor: pointer;
+    transition: box-shadow 0.25s ease;
+  }
+  .neu-select:focus {
+    box-shadow:
+      inset 4px 4px 8px rgba(163, 177, 198, 0.55),
+      inset -4px -4px 8px rgba(255, 255, 255, 0.55),
+      0 0 0 3px rgba(99, 102, 241, 0.2);
+  }
+
+  /* ─── Primary button ─── */
+  .neu-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    background: #e0e5ec;
+    border: none;
+    border-radius: 14px;
+    padding: 0.8rem 1.5rem;
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: #6366f1;
+    cursor: pointer;
+    box-shadow:
+      6px 6px 12px rgba(163, 177, 198, 0.5),
+      -6px -6px 12px rgba(255, 255, 255, 0.5);
+    transition: all 0.2s ease;
+  }
+  .neu-btn:hover {
+    box-shadow:
+      4px 4px 8px rgba(163, 177, 198, 0.5),
+      -4px -4px 8px rgba(255, 255, 255, 0.5);
+    color: #4f46e5;
+  }
+  .neu-btn:active {
+    box-shadow:
+      inset 4px 4px 8px rgba(163, 177, 198, 0.5),
+      inset -4px -4px 8px rgba(255, 255, 255, 0.5);
+  }
+  .neu-btn:disabled {
+    color: #8a95a8;
+    cursor: not-allowed;
+  }
+
+  /* ─── Secondary / subtle button ─── */
+  .neu-btn-sm {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: #e0e5ec;
+    border: none;
+    border-radius: 10px;
+    padding: 0.5rem 1rem;
+    font-size: 0.8rem;
+    font-weight: 600;
+    cursor: pointer;
+    box-shadow:
+      4px 4px 8px rgba(163, 177, 198, 0.45),
+      -4px -4px 8px rgba(255, 255, 255, 0.45);
+    transition: all 0.2s ease;
+  }
+  .neu-btn-sm:hover {
+    box-shadow:
+      2px 2px 5px rgba(163, 177, 198, 0.45),
+      -2px -2px 5px rgba(255, 255, 255, 0.45);
+  }
+  .neu-btn-sm:active {
+    box-shadow:
+      inset 3px 3px 6px rgba(163, 177, 198, 0.45),
+      inset -3px -3px 6px rgba(255, 255, 255, 0.45);
+  }
+
+  /* ─── Status badge ─── */
+  .neu-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.35rem 0.8rem;
+    border-radius: 50px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    box-shadow:
+      3px 3px 6px rgba(163, 177, 198, 0.4),
+      -3px -3px 6px rgba(255, 255, 255, 0.4);
+  }
+}
+
+/* ─── Animations ─── */
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(20px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.animate-fade-up {
+  animation: fadeUp 0.45s ease-out forwards;
+}

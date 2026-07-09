@@ -1,0 +1,48 @@
+# ═══════════════════════════════════════════
+#  Decentralized KYC Vault — .gitignore
+# ═══════════════════════════════════════════
+
+# ─── Dependencies ───
+node_modules/
+
+# ─── Environment & Secrets ───
+.env
+.env.*
+*.pem
+*.key
+gcp-key*.json
+gcp-key*.json.json
+
+# ─── Build Artifacts ───
+dist/
+build/
+out/
+
+# ─── Prisma ───
+prisma/dev.db
+prisma/dev.db-journal
+prisma/migrations/
+
+# ─── Blockchain (Hardhat) ───
+blockchain/cache/
+blockchain/artifacts/
+
+# ─── Logs ───
+*.log
+npm-debug.log*
+
+# ─── OS Files ───
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ─── IDE / Editor ───
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ─── Test / Coverage ───
+coverage/
+.nyc_output/
