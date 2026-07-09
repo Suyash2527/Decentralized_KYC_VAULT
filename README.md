@@ -384,4 +384,4 @@ All protected endpoints require `Authorization: Bearer <JWT>` header.
 
 ## License
 
-MIT © 2025 Decentralized KYC Vault Team
+MIT © 2026 Decentralized KYC Vault Team
