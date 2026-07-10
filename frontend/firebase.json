@@ -1,5 +1,6 @@
 {
   "hosting": {
+    "site": "idbi-kyc-vault",
     "public": "dist",
     "ignore": [
       "firebase.json",
