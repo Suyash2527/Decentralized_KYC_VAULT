@@ -16,7 +16,10 @@ app.use(express.json());
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
 const JWT_SECRET = process.env.ENCRYPTION_KEY || 'supersecretfallback';
-const GCP_API_KEY = process.env.GCP_API_KEY || 'AIzaSyCiW2tvu5BsKPkv92aZpL0L-_BXpuep_nU';
+const GCP_API_KEY = process.env.GCP_API_KEY;
+if (!GCP_API_KEY) {
+    console.warn("WARNING: GCP_API_KEY is not set in environment variables!");
+}
 
 // Removed seedUsers() to allow manual registration from scratch
 
