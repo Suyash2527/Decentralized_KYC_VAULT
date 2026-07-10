@@ -3,6 +3,7 @@ import { ethers } from 'ethers';
 const KYCVaultABI = [
   "function verifyKYC(string memory customerId, string memory payloadHash) external",
   "function grantConsent(string memory customerId, address partnerBank) external",
+  "function revokeConsent(string memory customerId, address partnerBank) external",
   "function checkStatus(string memory customerId, address partnerBank) external view returns (bool hasConsent, string memory payloadHash, uint256 verifiedAt, address verifierBank)"
 ];
 
@@ -24,6 +25,15 @@ export async function grantConsentOnChain(customerId: string, partnerBankAddress
     const contract = new ethers.Contract(contractAddress, KYCVaultABI, wallet);
     
     const tx = await contract.grantConsent(customerId, partnerBankAddress);
+    await tx.wait();
+    return tx.hash;
+}
+
+export async function revokeConsentOnChain(customerId: string, partnerBankAddress: string, customerPrivateKey: string) {
+    const wallet = new ethers.Wallet(customerPrivateKey, provider);
+    const contract = new ethers.Contract(contractAddress, KYCVaultABI, wallet);
+    
+    const tx = await contract.revokeConsent(customerId, partnerBankAddress);
     await tx.wait();
     return tx.hash;
 }

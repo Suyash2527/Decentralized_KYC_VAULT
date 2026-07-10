@@ -19,9 +19,9 @@ build/
 out/
 
 # ─── Prisma ───
-prisma/dev.db
-prisma/dev.db-journal
-prisma/migrations/
+**/prisma/*.db
+**/prisma/*.db-journal
+**/prisma/migrations/
 
 # ─── Blockchain (Hardhat) ───
 blockchain/cache/
@@ -46,3 +46,7 @@ desktop.ini
 # ─── Test / Coverage ───
 coverage/
 .nyc_output/
+
+# ─── Cloud & Deployment ───
+.firebase/
+env.yaml

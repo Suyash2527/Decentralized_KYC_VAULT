@@ -12,6 +12,7 @@ model Customer {
   publicId       String   @unique // The ID shared with banks
   encryptedPII   String   // AES-GCM encrypted payload
   piiHash        String   // SHA-256 for integrity and linking to blockchain
+  expiresAt      DateTime? // Support for self-destructing identities
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
   consents       Consent[]
