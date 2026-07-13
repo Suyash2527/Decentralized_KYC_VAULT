@@ -162,26 +162,18 @@ Create a `.env` file inside the `backend/` directory:
 # backend/.env
 
 PORT=3001
-CONTRACT_ADDRESS=0x7870Ff19FD81Ac191C677b917ce4eD4cC2ff68A7
+CONTRACT_ADDRESS=0xD81Ac197
 RPC_URL="https://ethereum-sepolia-rpc.publicnode.com"
-ENCRYPTION_KEY=00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff
-DATABASE_URL="postgresql://postgres:YOUR_PASSWORD@YOUR_CLOUD_SQL_IP:5432/postgres?schema=public"
+ENCRYPTION_KEY=
+DATABASE_URL="postgresql://postgres:YOUR_PASSWORD@YOUR_CLOUD_SQL_IP:543/postgres?schema=public"
 DEPLOYER_PRIVATE_KEY="YOUR_METAMASK_PRIVATE_KEY"
 ```
 
 > ⚠️ **Never commit the `.env` file.** The `.gitignore` already excludes it.
 
-### 4. Deploy the Smart Contract (optional — already deployed)
 
-The contract is already live at `0x7870Ff19FD81Ac191C677b917ce4eD4cC2ff68A7` on Sepolia.
 
-To redeploy:
-```bash
-cd blockchain
-npx hardhat run scripts/deploy.js --network sepolia
-```
-
-### 5. Push Database Schema to Cloud SQL
+### 4. Push Database Schema to Cloud SQL
 
 ```bash
 cd backend
