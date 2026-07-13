@@ -1,49 +1,81 @@
 import { ethers } from 'ethers';
-// Using hardcoded ABI for prototype to avoid complex imports between workspaces
+
 const KYCVaultABI = [
-  "function verifyKYC(string memory customerId, string memory payloadHash) external",
-  "function grantConsent(string memory customerId, address partnerBank) external",
-  "function revokeConsent(string memory customerId, address partnerBank) external",
-  "function checkStatus(string memory customerId, address partnerBank) external view returns (bool hasConsent, string memory payloadHash, uint256 verifiedAt, address verifierBank)"
+    'function verifyKYC(string customerId, bytes32 payloadHash) external',
+    'function grantConsent(string customerId, bytes32 partnerIdHash) external',
+    'function revokeConsent(string customerId, bytes32 partnerIdHash) external',
+    'function checkStatus(string customerId, bytes32 partnerIdHash) external view returns (bool hasConsent, bool isVerified, bytes32 payloadHash, uint256 verifiedAt, address verifierBank)'
 ];
 
-// For hackathon, default to localhost hardhat node
-const provider = new ethers.JsonRpcProvider(process.env.RPC_URL || "http://127.0.0.1:8545");
-const contractAddress = process.env.CONTRACT_ADDRESS || "";
+const provider = new ethers.JsonRpcProvider(process.env.RPC_URL || 'http://127.0.0.1:8545');
 
-export async function verifyKYCOnChain(customerId: string, payloadHash: string, bankPrivateKey: string) {
-    const wallet = new ethers.Wallet(bankPrivateKey, provider);
-    const contract = new ethers.Contract(contractAddress, KYCVaultABI, wallet);
-    
+function requireEnv(name: string): string {
+    const value = process.env[name];
+
+    if (!value) {
+        throw new Error(`${name} environment variable is required.`);
+    }
+
+    return value;
+}
+
+function getContractAddress(): string {
+    return requireEnv('CONTRACT_ADDRESS');
+}
+
+function getSigner() {
+    const privateKey = requireEnv('DEPLOYER_PRIVATE_KEY');
+    return new ethers.Wallet(privateKey, provider);
+}
+
+function getWriteContract() {
+    return new ethers.Contract(getContractAddress(), KYCVaultABI, getSigner());
+}
+
+function getReadContract() {
+    return new ethers.Contract(getContractAddress(), KYCVaultABI, provider);
+}
+
+export function normalizePartnerId(partnerId: string): string {
+    return partnerId.trim().toLowerCase();
+}
+
+function toPartnerHash(partnerId: string): string {
+    return ethers.id(normalizePartnerId(partnerId));
+}
+
+export async function verifyKYCOnChain(customerId: string, payloadHash: string) {
+    const contract = getWriteContract();
     const tx = await contract.verifyKYC(customerId, payloadHash);
     await tx.wait();
+
     return tx.hash;
 }
 
-export async function grantConsentOnChain(customerId: string, partnerBankAddress: string, customerPrivateKey: string) {
-    const wallet = new ethers.Wallet(customerPrivateKey, provider);
-    const contract = new ethers.Contract(contractAddress, KYCVaultABI, wallet);
-    
-    const tx = await contract.grantConsent(customerId, partnerBankAddress);
+export async function grantConsentOnChain(customerId: string, partnerId: string) {
+    const contract = getWriteContract();
+    const tx = await contract.grantConsent(customerId, toPartnerHash(partnerId));
     await tx.wait();
+
     return tx.hash;
 }
 
-export async function revokeConsentOnChain(customerId: string, partnerBankAddress: string, customerPrivateKey: string) {
-    const wallet = new ethers.Wallet(customerPrivateKey, provider);
-    const contract = new ethers.Contract(contractAddress, KYCVaultABI, wallet);
-    
-    const tx = await contract.revokeConsent(customerId, partnerBankAddress);
+export async function revokeConsentOnChain(customerId: string, partnerId: string) {
+    const contract = getWriteContract();
+    const tx = await contract.revokeConsent(customerId, toPartnerHash(partnerId));
     await tx.wait();
+
     return tx.hash;
 }
 
-export async function checkStatusOnChain(customerId: string, partnerBankAddress: string) {
-    const contract = new ethers.Contract(contractAddress, KYCVaultABI, provider);
-    const result = await contract.checkStatus(customerId, partnerBankAddress);
+export async function checkStatusOnChain(customerId: string, partnerId: string) {
+    const contract = getReadContract();
+    const result = await contract.checkStatus(customerId, toPartnerHash(partnerId));
+
     return {
         hasConsent: result.hasConsent,
-        payloadHash: result.payloadHash,
+        isVerified: result.isVerified,
+        payloadHash: String(result.payloadHash).toLowerCase(),
         verifiedAt: Number(result.verifiedAt),
         verifierBank: result.verifierBank
     };

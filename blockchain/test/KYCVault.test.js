@@ -2,54 +2,70 @@ const { expect } = require("chai");
 
 describe("KYCVault", function () {
   let kycVault;
-  let bankA, bankB, customer;
+  let operator, attacker;
+  const customerId = "CUST123";
+  const payloadHash = "0x6f3fef6dc51c7996a74992b70d0c35f328ed9096b9b8ba3e43977e1dfed9bb16";
+  const partnerIdHash = ethers.id("bankb");
 
   beforeEach(async function () {
-    const [owner, _bankA, _bankB, _customer] = await ethers.getSigners();
-    bankA = _bankA;
-    bankB = _bankB;
-    customer = _customer;
+    const [deployer, _operator, _attacker] = await ethers.getSigners();
+    operator = _operator;
+    attacker = _attacker;
 
     const KYCVaultFactory = await ethers.getContractFactory("KYCVault");
-    kycVault = await KYCVaultFactory.deploy();
+    kycVault = await KYCVaultFactory.connect(deployer).deploy(operator.address);
   });
 
-  it("should allow Bank A to verify a customer", async function () {
-    const customerId = "CUST123";
-    const payloadHash = "0xhashofpii";
-
-    await expect(kycVault.connect(bankA).verifyKYC(customerId, payloadHash))
+  it("allows the operator to verify a customer", async function () {
+    await expect(kycVault.connect(operator).verifyKYC(customerId, payloadHash))
       .to.emit(kycVault, "KYCVerified")
-      .withArgs(customerId, bankA.address, payloadHash);
+      .withArgs(customerId, operator.address, payloadHash);
 
     const proof = await kycVault.kycProofs(customerId);
     expect(proof.isValid).to.be.true;
     expect(proof.payloadHash).to.equal(payloadHash);
   });
 
-  it("should manage consent properly", async function () {
-    const customerId = "CUST123";
-    const payloadHash = "0xhashofpii";
+  it("blocks non-operators from mutating contract state", async function () {
+    await expect(kycVault.connect(attacker).verifyKYC(customerId, payloadHash))
+      .to.be.revertedWith("Only operator can perform this action");
 
-    await kycVault.connect(bankA).verifyKYC(customerId, payloadHash);
+    await expect(kycVault.connect(attacker).grantConsent(customerId, partnerIdHash))
+      .to.be.revertedWith("Only operator can perform this action");
 
-    // Bank B checks status (no consent)
-    const statusNoConsent = await kycVault.checkStatus(customerId, bankB.address);
-    expect(statusNoConsent.hasConsent).to.be.false;
+    await expect(kycVault.connect(attacker).revokeConsent(customerId, partnerIdHash))
+      .to.be.revertedWith("Only operator can perform this action");
+  });
 
-    // Grant consent to Bank B
-    await expect(kycVault.connect(customer).grantConsent(customerId, bankB.address))
+  it("tracks consent status for a hashed partner identifier", async function () {
+    await kycVault.connect(operator).verifyKYC(customerId, payloadHash);
+
+    const statusBeforeConsent = await kycVault.checkStatus(customerId, partnerIdHash);
+    expect(statusBeforeConsent.consentGranted).to.be.false;
+    expect(statusBeforeConsent.isVerified).to.be.true;
+    expect(statusBeforeConsent.payloadHash).to.equal(payloadHash);
+
+    await expect(kycVault.connect(operator).grantConsent(customerId, partnerIdHash))
       .to.emit(kycVault, "ConsentGranted")
-      .withArgs(customerId, bankB.address);
+      .withArgs(customerId, partnerIdHash);
 
-    // Bank B checks status (with consent)
-    const statusWithConsent = await kycVault.checkStatus(customerId, bankB.address);
-    expect(statusWithConsent.hasConsent).to.be.true;
+    const statusWithConsent = await kycVault.checkStatus(customerId, partnerIdHash);
+    expect(statusWithConsent.consentGranted).to.be.true;
+    expect(statusWithConsent.isVerified).to.be.true;
     expect(statusWithConsent.payloadHash).to.equal(payloadHash);
 
-    // Revoke consent
-    await kycVault.connect(customer).revokeConsent(customerId, bankB.address);
-    const statusRevoked = await kycVault.checkStatus(customerId, bankB.address);
-    expect(statusRevoked.hasConsent).to.be.false;
+    await expect(kycVault.connect(operator).revokeConsent(customerId, partnerIdHash))
+      .to.emit(kycVault, "ConsentRevoked")
+      .withArgs(customerId, partnerIdHash);
+
+    const statusAfterRevoke = await kycVault.checkStatus(customerId, partnerIdHash);
+    expect(statusAfterRevoke.consentGranted).to.be.false;
+    expect(statusAfterRevoke.isVerified).to.be.true;
+  });
+
+  it("returns an unverified status for unknown customers", async function () {
+    const statusNoConsent = await kycVault.checkStatus("UNKNOWN", partnerIdHash);
+    expect(statusNoConsent.consentGranted).to.be.false;
+    expect(statusNoConsent.isVerified).to.be.false;
   });
 });

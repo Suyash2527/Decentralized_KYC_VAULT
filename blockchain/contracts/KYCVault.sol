@@ -2,34 +2,36 @@
 pragma solidity ^0.8.19;
 
 contract KYCVault {
-    // Structure to hold the KYC proof on-chain
     struct KYCProof {
-        string payloadHash; // SHA-256 hash of the encrypted PII
+        bytes32 payloadHash;
         uint256 verifiedAt;
         bool isValid;
         address verifierBank;
     }
 
-    // customerId => KYCProof
+    address public immutable operator;
+
     mapping(string => KYCProof) public kycProofs;
-    
-    // customerId => (partnerBank => hasConsent)
-    mapping(string => mapping(address => bool)) public consentList;
+    mapping(string => mapping(bytes32 => bool)) private consentList;
 
-    event KYCVerified(string indexed customerId, address indexed verifierBank, string payloadHash);
-    event ConsentGranted(string indexed customerId, address indexed partnerBank);
-    event ConsentRevoked(string indexed customerId, address indexed partnerBank);
+    event KYCVerified(string indexed customerId, address indexed verifierBank, bytes32 payloadHash);
+    event ConsentGranted(string indexed customerId, bytes32 indexed partnerIdHash);
+    event ConsentRevoked(string indexed customerId, bytes32 indexed partnerIdHash);
 
-    // Modifier to restrict access to the verifier bank
-    modifier onlyVerifier(string memory customerId) {
-        require(kycProofs[customerId].verifierBank == msg.sender, "Only verifier bank can update");
+    modifier onlyOperator() {
+        require(msg.sender == operator, "Only operator can perform this action");
         _;
     }
 
-    // Called by the originating bank to mint the KYC proof
-    function verifyKYC(string memory customerId, string memory payloadHash) external {
+    constructor(address operatorAddress) {
+        require(operatorAddress != address(0), "Operator address required");
+        operator = operatorAddress;
+    }
+
+    function verifyKYC(string calldata customerId, bytes32 payloadHash) external onlyOperator {
+        require(bytes(customerId).length > 0, "Customer ID required");
         require(!kycProofs[customerId].isValid, "KYC already verified");
-        
+
         kycProofs[customerId] = KYCProof({
             payloadHash: payloadHash,
             verifiedAt: block.timestamp,
@@ -40,30 +42,50 @@ contract KYCVault {
         emit KYCVerified(customerId, msg.sender, payloadHash);
     }
 
-    // Called by customer (or a relay/backend on their behalf) to grant consent
-    function grantConsent(string memory customerId, address partnerBank) external {
+    function grantConsent(string calldata customerId, bytes32 partnerIdHash) external onlyOperator {
         require(kycProofs[customerId].isValid, "No valid KYC proof found");
-        consentList[customerId][partnerBank] = true;
-        
-        emit ConsentGranted(customerId, partnerBank);
+        consentList[customerId][partnerIdHash] = true;
+
+        emit ConsentGranted(customerId, partnerIdHash);
     }
 
-    // Called by customer to revoke consent
-    function revokeConsent(string memory customerId, address partnerBank) external {
-        consentList[customerId][partnerBank] = false;
-        
-        emit ConsentRevoked(customerId, partnerBank);
+    function revokeConsent(string calldata customerId, bytes32 partnerIdHash) external onlyOperator {
+        require(kycProofs[customerId].isValid, "No valid KYC proof found");
+        consentList[customerId][partnerIdHash] = false;
+
+        emit ConsentRevoked(customerId, partnerIdHash);
     }
 
-    // Called by partner bank to verify status
-    function checkStatus(string memory customerId, address partnerBank) external view returns (bool hasConsent, string memory payloadHash, uint256 verifiedAt, address verifierBank) {
-        hasConsent = consentList[customerId][partnerBank];
-        
-        if (hasConsent || kycProofs[customerId].verifierBank == partnerBank) {
-            KYCProof memory proof = kycProofs[customerId];
-            return (true, proof.payloadHash, proof.verifiedAt, proof.verifierBank);
-        } else {
-            return (false, "", 0, address(0));
+    function hasConsent(string calldata customerId, bytes32 partnerIdHash) external view returns (bool) {
+        return consentList[customerId][partnerIdHash];
+    }
+
+    function checkStatus(
+        string calldata customerId,
+        bytes32 partnerIdHash
+    )
+        external
+        view
+        returns (
+            bool consentGranted,
+            bool isVerified,
+            bytes32 payloadHash,
+            uint256 verifiedAt,
+            address verifierBank
+        )
+    {
+        KYCProof memory proof = kycProofs[customerId];
+
+        if (!proof.isValid) {
+            return (false, false, bytes32(0), 0, address(0));
         }
+
+        return (
+            consentList[customerId][partnerIdHash],
+            true,
+            proof.payloadHash,
+            proof.verifiedAt,
+            proof.verifierBank
+        );
     }
 }

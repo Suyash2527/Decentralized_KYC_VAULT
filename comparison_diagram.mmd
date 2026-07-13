@@ -1,0 +1,37 @@
+flowchart TD
+    %% Styling
+    classDef traditional fill:#3b070c,stroke:#ff4d4d,stroke-width:2px,color:#fff;
+    classDef web3 fill:#022c15,stroke:#00ff88,stroke-width:2px,color:#fff;
+    classDef highlight fill:#1f2937,stroke:#6366f1,stroke-width:2px,color:#fff;
+
+    Title(["IDBI Bank Portfolio Impact (2.4 Crore Customers)"]):::highlight
+
+    subgraph Traditional["❌ Traditional eKYC Vendors"]
+        direction TB
+        T_Cost["Cost: ₹7.2 Crores (₹30/user)"]:::traditional
+        T_Storage["Storage: 120 Terabytes"]:::traditional
+        T_Risk["Risk: Massive Data Honeypot"]:::traditional
+        
+        T_Cost --> T_Storage --> T_Risk
+    end
+
+    subgraph Web3["✅ Decentralized KYC Vault (Our Solution)"]
+        direction TB
+        W_Cost["Cost: ₹1.2 Crores (₹0.50/user)"]:::web3
+        W_Storage["Storage: 12 Gigabytes"]:::web3
+        W_Risk["Risk: Zero-Trust / No Raw Data"]:::web3
+        
+        W_Cost --> W_Storage --> W_Risk
+    end
+
+    Title --> Traditional
+    Title --> Web3
+
+    %% Savings summary
+    Summary_Cost[/"💰 Net Savings: ₹6 Crores"/]:::highlight
+    Summary_Storage[/"💾 Storage Reduction: 99.99%"/]:::highlight
+
+    Traditional -.-> Summary_Cost
+    Web3 -.-> Summary_Cost
+    Traditional -.-> Summary_Storage
+    Web3 -.-> Summary_Storage

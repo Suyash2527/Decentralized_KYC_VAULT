@@ -1,0 +1,24 @@
+sequenceDiagram
+    participant U as User (Frontend)
+    participant B as Backend API (Cloud Run)
+    participant AI as Google Vision API
+    participant SC as Ethereum Smart Contract
+    
+    Note over U, SC: 1. Identity Onboarding
+    U->>B: Uploads ID Document & Details
+    B->>AI: Sends document for OCR Extraction
+    AI-->>B: Returns extracted text/validation
+    B->>SC: Writes Identity Hash to Blockchain
+    SC-->>U: Identity Verified & Anchored
+    
+    Note over U, SC: 2. Selective Disclosure & Consent
+    U->>SC: Grants targeted access to 3rd Party
+    SC-->>B: Access event recorded on-chain
+    
+    Note over U, SC: 3. Revocation & Self-Destruct
+    alt Manual Revocation
+        U->>SC: Revokes access (1-click)
+    else Auto-Expiry (Cron)
+        B->>SC: Triggers self-destruct function
+    end
+    SC-->>U: Access permanently terminated

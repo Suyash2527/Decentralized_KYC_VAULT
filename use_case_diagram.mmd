@@ -1,0 +1,21 @@
+flowchart LR
+    %% Actors
+    User([User])
+    ThirdParty([Third-Party Requester])
+    System([KYC Vault Backend])
+
+    %% User Actions
+    User --> |Uploads ID| UC1(Onboard Identity)
+    User --> |Approves Data Request| UC2(Selective Disclosure)
+    User --> |1-Click Revocation| UC3(Revoke Consent)
+    
+    %% System Actions
+    UC1 -.-> |Extracts Data| UC4(AI OCR Validation)
+    UC4 -.-> |Hashes Data| UC5(Anchor to Ethereum)
+    System --> UC4
+    System --> UC5
+    
+    %% Third Party Actions
+    ThirdParty --> |Requests Identity Data| UC2
+    UC2 -.-> |Triggers| UC6(Grant Access on Smart Contract)
+    UC3 -.-> |Triggers| UC7(Wipe Access from Smart Contract)

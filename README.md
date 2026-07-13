@@ -14,6 +14,7 @@
 
 ## 📖 Table of Contents
 
+- [Live Demo & Testing Guide](#-live-demo--testing-guide)
 - [Problem Statement](#-problem-statement)
 - [Solution Architecture](#-solution-architecture)
 - [Tech Stack](#-tech-stack)
@@ -28,6 +29,34 @@
 - [Security Model](#-security-model)
 - [Future Roadmap](#-future-roadmap)
 - [License](#license)
+
+---
+
+## 🚀 Live Demo & Testing Guide
+
+**Backend Live API (Google Cloud Run):** [https://idbi-kyc-backend-759039332755.us-central1.run.app](https://idbi-kyc-backend-759039332755.us-central1.run.app)
+*(Note: To view the frontend, run `npm run dev` in the `frontend` folder).*
+
+### How to Test the Application (For Judges)
+Welcome to the Decentralized KYC Vault! You can test the entire lifecycle in 3 simple steps on your own machine.
+
+**Step 1: The Verifier Bank (Upload & Verify)**
+1. Go to the app and click **Get Started**.
+2. Register a new account and select **Verifier Bank** as the role. 
+   *(Note: For the demo, you can use any username/password. The system will auto-generate your Bank ID).*
+3. Log in as the Verifier. Upload a sample Aadhaar/PAN image. Our AI OCR will instantly extract the text. 
+4. Click **Verify on Blockchain**. You will see the Ethereum transaction hash generated in real-time.
+
+**Step 2: The Customer (Grant Consent)**
+1. Log out, and register a new account as a **Customer**.
+2. Log in. You will see your verified KYC status pulled directly from the Blockchain.
+3. Scroll down to **Consent Management**. Grant consent to a partner (you can use `BANK_B` or any partner ID).
+4. *Optional*: Test the "Self-Destruct" feature by setting an expiry timer.
+
+**Step 3: The Partner Institution (Zero-Knowledge Access)**
+1. Log out, and register a new account as a **Partner Institution**.
+2. Log in and enter the Customer's Public ID. 
+3. If consent is granted, the app will cross-reference the off-chain data with the Blockchain Hash to ensure the data hasn't been tampered with, and grant you access!
 
 ---
 

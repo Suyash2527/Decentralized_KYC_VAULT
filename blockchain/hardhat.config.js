@@ -1,7 +1,12 @@
 require("@nomicfoundation/hardhat-toolbox");
 
-require("dotenv").config();
-const PRIVATE_KEY = process.env.DEPLOYER_PRIVATE_KEY || process.env.PRIVATE_KEY || "0x0000000000000000000000000000000000000000000000000000000000000000";
+try {
+  require("dotenv").config();
+} catch (error) {
+  // Allow local test and CI runs without dotenv installed.
+}
+
+const PRIVATE_KEY = process.env.DEPLOYER_PRIVATE_KEY || process.env.PRIVATE_KEY;
 const SEPOLIA_RPC_URL = "https://ethereum-sepolia-rpc.publicnode.com";
 
 /** @type import('hardhat/config').HardhatUserConfig */
@@ -10,7 +15,7 @@ module.exports = {
   networks: {
     sepolia: {
       url: SEPOLIA_RPC_URL,
-      accounts: [PRIVATE_KEY]
+      accounts: PRIVATE_KEY ? [PRIVATE_KEY] : []
     }
   }
 };
