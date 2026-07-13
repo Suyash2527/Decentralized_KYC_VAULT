@@ -34,6 +34,7 @@
 
 ## 🚀 Live Demo & Testing Guide
 
+**Frontend Live Web App:** [https://idbi-kyc-vault.web.app](https://idbi-kyc-vault.web.app)
 **Backend Live API (Google Cloud Run):** [https://idbi-kyc-backend-759039332755.us-central1.run.app](https://idbi-kyc-backend-759039332755.us-central1.run.app)
 *(Note: To view the frontend, run `npm run dev` in the `frontend` folder).*
 
