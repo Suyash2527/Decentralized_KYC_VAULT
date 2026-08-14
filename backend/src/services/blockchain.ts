@@ -9,6 +9,16 @@ const KYCVaultABI = [
 
 const provider = new ethers.JsonRpcProvider(process.env.RPC_URL || 'http://127.0.0.1:8545');
 
+// Every write is signed by the single operator key, so two concurrent requests
+// would otherwise read the same nonce and one would fail with NONCE_EXPIRED.
+// Broadcasts are serialised through this chain and the nonce is tracked locally;
+// confirmation waiting happens outside the lock so throughput is not blocked by
+// a 12s block time.
+let broadcastQueue: Promise<unknown> = Promise.resolve();
+let nextNonce: number | null = null;
+
+const WAIT_FOR_CONFIRMATION = process.env.WAIT_FOR_CONFIRMATION !== 'false';
+
 function requireEnv(name: string): string {
     const value = process.env[name];
 
@@ -36,6 +46,42 @@ function getReadContract() {
     return new ethers.Contract(getContractAddress(), KYCVaultABI, provider);
 }
 
+function enqueue<T>(task: () => Promise<T>): Promise<T> {
+    const result = broadcastQueue.then(task, task);
+    broadcastQueue = result.catch(() => undefined);
+    return result;
+}
+
+async function broadcast(
+    send: (contract: ethers.Contract, overrides: { nonce: number }) => Promise<ethers.ContractTransactionResponse>
+): Promise<string> {
+    const transaction = await enqueue(async () => {
+        const contract = getWriteContract();
+
+        if (nextNonce === null) {
+            const signer = getSigner();
+            nextNonce = await provider.getTransactionCount(signer.address, 'pending');
+        }
+
+        try {
+            const tx = await send(contract, { nonce: nextNonce });
+            nextNonce += 1;
+            return tx;
+        } catch (error) {
+            // Resynchronise with the chain on the next call rather than
+            // carrying a nonce that may now be wrong.
+            nextNonce = null;
+            throw error;
+        }
+    });
+
+    if (WAIT_FOR_CONFIRMATION) {
+        await transaction.wait();
+    }
+
+    return transaction.hash;
+}
+
 export function normalizePartnerId(partnerId: string): string {
     return partnerId.trim().toLowerCase();
 }
@@ -45,27 +91,15 @@ function toPartnerHash(partnerId: string): string {
 }
 
 export async function verifyKYCOnChain(customerId: string, payloadHash: string) {
-    const contract = getWriteContract();
-    const tx = await contract.verifyKYC(customerId, payloadHash);
-    await tx.wait();
-
-    return tx.hash;
+    return broadcast((contract, overrides) => contract.verifyKYC(customerId, payloadHash, overrides));
 }
 
 export async function grantConsentOnChain(customerId: string, partnerId: string) {
-    const contract = getWriteContract();
-    const tx = await contract.grantConsent(customerId, toPartnerHash(partnerId));
-    await tx.wait();
-
-    return tx.hash;
+    return broadcast((contract, overrides) => contract.grantConsent(customerId, toPartnerHash(partnerId), overrides));
 }
 
 export async function revokeConsentOnChain(customerId: string, partnerId: string) {
-    const contract = getWriteContract();
-    const tx = await contract.revokeConsent(customerId, toPartnerHash(partnerId));
-    await tx.wait();
-
-    return tx.hash;
+    return broadcast((contract, overrides) => contract.revokeConsent(customerId, toPartnerHash(partnerId), overrides));
 }
 
 export async function checkStatusOnChain(customerId: string, partnerId: string) {

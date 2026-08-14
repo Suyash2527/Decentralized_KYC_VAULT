@@ -1,6 +1,8 @@
 import 'dotenv/config';
 import cors from 'cors';
 import express, { NextFunction, Request, Response } from 'express';
+import rateLimit from 'express-rate-limit';
+import helmet from 'helmet';
 import jwt from 'jsonwebtoken';
 import multer from 'multer';
 import { PrismaClient } from '@prisma/client';
@@ -22,25 +24,42 @@ interface AuthenticatedRequest extends Request {
     user: AuthUser;
 }
 
-interface OtpRecord {
-    attemptsRemaining: number;
-    disclosureType: DisclosureType;
-    expiresAt: number;
-    otpHash: string;
-    partnerId: string;
-    salt: string;
-}
+type AccessChannel = 'CONSENT' | 'OTP';
+type AccessOutcome = 'GRANTED' | 'DENIED';
 
 const app = express();
 const prisma = new PrismaClient();
+
+// Cloud Run terminates TLS upstream, so the client IP the rate limiter keys on
+// only arrives via X-Forwarded-For.
+app.set('trust proxy', 1);
 
 const corsOrigins = process.env.CORS_ORIGIN
     ?.split(',')
     .map((value) => value.trim())
     .filter(Boolean);
 
+app.use(helmet());
 app.use(cors(corsOrigins && corsOrigins.length > 0 ? { origin: corsOrigins } : undefined));
 app.use(express.json());
+
+const authLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 20,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+    message: { error: 'Too many authentication attempts. Try again later.' }
+});
+
+// The per-challenge attempt counter caps guesses against one OTP; this caps an
+// attacker cycling through fresh challenges to get unlimited guesses overall.
+const otpLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 30,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+    message: { error: 'Too many OTP attempts. Try again later.' }
+});
 
 const upload = multer({
     storage: multer.memoryStorage(),
@@ -65,7 +84,6 @@ const upload = multer({
 
 const allowedRoles = new Set<AppRole>(['VERIFIER', 'CUSTOMER', 'PARTNER']);
 const allowedDisclosureTypes = new Set<DisclosureType>(['FULL', 'NAME_ONLY', 'PROOF_OF_EXISTENCE']);
-const otpStore = new Map<string, OtpRecord>();
 
 const JWT_SECRET = process.env.JWT_SECRET ?? '';
 
@@ -105,19 +123,28 @@ function signToken(user: AuthUser): string {
     return jwt.sign(user, JWT_SECRET, { expiresIn: '2h' });
 }
 
-function makeOtpKey(customerId: string, partnerId: string): string {
-    return `${customerId}::${normalizePartnerId(partnerId)}`;
-}
-
 function hashOtp(customerId: string, partnerId: string, otp: string, salt: string): string {
     return hashData(`${customerId}:${normalizePartnerId(partnerId)}:${salt}:${otp}`);
 }
 
-function clearOtpChallengesForCustomer(customerId: string) {
-    for (const key of otpStore.keys()) {
-        if (key.startsWith(`${customerId}::`)) {
-            otpStore.delete(key);
-        }
+async function clearOtpChallengesForCustomer(customerId: string) {
+    await prisma.otpChallenge.deleteMany({ where: { customerId } });
+}
+
+// Access logging must never take down the request that triggered it — a failed
+// audit write is reported, not propagated to the caller.
+async function recordAccess(entry: {
+    customerId: string;
+    partnerId: string;
+    channel: AccessChannel;
+    outcome: AccessOutcome;
+    disclosureType: DisclosureType | 'NONE';
+    reason?: string;
+}) {
+    try {
+        await prisma.accessLog.create({ data: { ...entry, reason: entry.reason ?? null } });
+    } catch (error) {
+        console.error('Failed to write access log.', error);
     }
 }
 
@@ -188,18 +215,20 @@ const selfDestructSweep = setInterval(async () => {
         });
 
         for (const customer of expiredCustomers) {
-            clearOtpChallengesForCustomer(customer.publicId);
+            await clearOtpChallengesForCustomer(customer.publicId);
             await prisma.$transaction([
                 prisma.consent.deleteMany({ where: { customerId: customer.publicId } }),
                 prisma.customer.delete({ where: { id: customer.id } })
             ]);
         }
+
+        await prisma.otpChallenge.deleteMany({ where: { expiresAt: { lt: new Date() } } });
     } catch (error) {
         console.error('Self-destruct sweep failed.', error);
     }
 }, SELF_DESTRUCT_SWEEP_MS);
 
-app.post('/api/auth/register', async (req, res) => {
+app.post('/api/auth/register', authLimiter, async (req, res) => {
     const username = normalizeIdentifier(req.body.username);
     const password = typeof req.body.password === 'string' ? req.body.password : '';
     const role = normalizeRole(req.body.role);
@@ -252,7 +281,7 @@ app.post('/api/auth/register', async (req, res) => {
     }
 });
 
-app.post('/api/auth/login', async (req, res) => {
+app.post('/api/auth/login', authLimiter, async (req, res) => {
     const username = normalizeIdentifier(req.body.username);
     const password = typeof req.body.password === 'string' ? req.body.password : '';
 
@@ -568,23 +597,36 @@ app.get('/api/kyc/access/:customerId', authenticateToken, async (req: Request, r
         return;
     }
 
+    const partnerId = normalizePartnerId(authReq.user.bankId);
+    const denyAccess = async (statusCode: number, reason: string) => {
+        await recordAccess({
+            customerId,
+            partnerId,
+            channel: 'CONSENT',
+            outcome: 'DENIED',
+            disclosureType: 'NONE',
+            reason
+        });
+        res.status(statusCode).json({ error: reason });
+    };
+
     try {
         const status = await checkStatusOnChain(customerId, authReq.user.bankId);
 
         if (!status.isVerified) {
-            res.status(404).json({ error: 'No verified on-chain KYC proof found.' });
+            await denyAccess(404, 'No verified on-chain KYC proof found.');
             return;
         }
 
         if (!status.hasConsent) {
-            res.status(403).json({ error: 'Access denied: no active consent found.' });
+            await denyAccess(403, 'Access denied: no active consent found.');
             return;
         }
 
         const customer = await ensureCustomerRecord(customerId);
 
         if (!customer) {
-            res.status(404).json({ error: 'Data not found in secure storage.' });
+            await denyAccess(404, 'Data not found in secure storage.');
             return;
         }
 
@@ -592,9 +634,17 @@ app.get('/api/kyc/access/:customerId', authenticateToken, async (req: Request, r
         const currentHash = `0x${hashData(decryptedString)}`.toLowerCase();
 
         if (currentHash !== status.payloadHash) {
-            res.status(500).json({ error: 'Data integrity verification failed.' });
+            await denyAccess(500, 'Data integrity verification failed.');
             return;
         }
+
+        await recordAccess({
+            customerId,
+            partnerId,
+            channel: 'CONSENT',
+            outcome: 'GRANTED',
+            disclosureType: 'FULL'
+        });
 
         res.json({
             success: true,
@@ -604,6 +654,72 @@ app.get('/api/kyc/access/:customerId', authenticateToken, async (req: Request, r
         });
     } catch (error) {
         handleServerError(res, 'Unable to retrieve customer data.', error);
+    }
+});
+
+// Lets the customer see what is actually in their own vault. Until now only
+// PARTNER accounts could read PII, so the owner was the one role that could not
+// see their own record.
+app.get('/api/kyc/me', authenticateToken, async (req: Request, res: Response) => {
+    const authReq = req as AuthenticatedRequest;
+
+    if (authReq.user.role !== 'CUSTOMER') {
+        res.status(403).json({ error: 'Unauthorized role.' });
+        return;
+    }
+
+    const customerId = authReq.user.bankId;
+
+    try {
+        const customer = await ensureCustomerRecord(customerId);
+
+        if (!customer) {
+            res.json({ success: true, verified: false, pii: null, consents: [] });
+            return;
+        }
+
+        const [status, consents] = await Promise.all([
+            // Consent is irrelevant here; this call is only used for the
+            // verification proof, which is not partner-specific.
+            checkStatusOnChain(customerId, customerId),
+            prisma.consent.findMany({ where: { customerId }, orderBy: { updatedAt: 'desc' } })
+        ]);
+
+        const decryptedString = await decrypt(customer.encryptedPII);
+        const currentHash = `0x${hashData(decryptedString)}`.toLowerCase();
+
+        res.json({
+            success: true,
+            verified: status.isVerified,
+            integrityOk: status.isVerified ? currentHash === status.payloadHash : null,
+            pii: JSON.parse(decryptedString),
+            piiHash: `0x${customer.piiHash}`,
+            verifiedAt: status.isVerified ? new Date(status.verifiedAt * 1000).toISOString() : null,
+            verifierBank: status.isVerified ? status.verifierBank : null,
+            expiresAt: customer.expiresAt,
+            consents: consents.map((consent) => ({
+                partnerId: consent.partnerId,
+                status: consent.status,
+                updatedAt: consent.updatedAt
+            }))
+        });
+    } catch (error) {
+        handleServerError(res, 'Unable to load your identity record.', error);
+    }
+});
+
+// Backs the partner picker, replacing free-text entry that failed on typos.
+app.get('/api/partners', authenticateToken, async (_req: Request, res: Response) => {
+    try {
+        const partners = await prisma.bankUser.findMany({
+            where: { role: 'PARTNER' },
+            select: { username: true, bankId: true },
+            orderBy: { username: 'asc' }
+        });
+
+        res.json({ success: true, partners });
+    } catch (error) {
+        handleServerError(res, 'Unable to load partner accounts.', error);
     }
 });
 
@@ -617,12 +733,17 @@ app.get('/api/audit/:customerId', authenticateToken, async (req: Request, res: R
     }
 
     try {
-        const [consents, customer] = await Promise.all([
+        const [consents, customer, accessLogs] = await Promise.all([
             prisma.consent.findMany({
                 where: { customerId },
                 orderBy: { updatedAt: 'desc' }
             }),
-            ensureCustomerRecord(customerId)
+            ensureCustomerRecord(customerId),
+            prisma.accessLog.findMany({
+                where: { customerId },
+                orderBy: { createdAt: 'desc' },
+                take: 200
+            })
         ]);
 
         const auditTrail: Array<ReturnType<typeof buildAuditEvent> & { hash?: string | null }> = [];
@@ -651,6 +772,26 @@ app.get('/api/audit/:customerId', authenticateToken, async (req: Request, res: R
                         : `Your account removed ${consent.partnerId}'s access to your verified record.`,
                     consent.updatedAt,
                     consent.partnerId
+                ),
+                hash: null
+            });
+        }
+
+        for (const log of accessLogs) {
+            const viaOtp = log.channel === 'OTP';
+            const granted = log.outcome === 'GRANTED';
+
+            auditTrail.push({
+                ...buildAuditEvent(
+                    granted ? 'ACCESS_GRANTED' : 'ACCESS_DENIED',
+                    granted
+                        ? `${log.partnerId} read your record`
+                        : `${log.partnerId} was denied access`,
+                    granted
+                        ? `Disclosed via ${viaOtp ? 'one-time password' : 'standing consent'} at the ${log.disclosureType} level.`
+                        : `Attempted access via ${viaOtp ? 'one-time password' : 'standing consent'} was blocked. ${log.reason ?? ''}`.trim(),
+                    log.createdAt,
+                    log.partnerId
                 ),
                 hash: null
             });
@@ -704,15 +845,20 @@ app.post('/api/otp/generate', authenticateToken, async (req: Request, res: Respo
 
         const otp = crypto.randomInt(0, 1_000_000).toString().padStart(6, '0');
         const salt = crypto.randomBytes(16).toString('hex');
-        const partnerId = partner.bankId;
+        const partnerId = normalizePartnerId(partner.bankId);
 
-        otpStore.set(makeOtpKey(customerId, partnerId), {
+        const challenge = {
             attemptsRemaining: OTP_MAX_ATTEMPTS,
             disclosureType,
-            expiresAt: Date.now() + OTP_TTL_MS,
+            expiresAt: new Date(Date.now() + OTP_TTL_MS),
             otpHash: hashOtp(customerId, partnerId, otp, salt),
-            partnerId,
             salt
+        };
+
+        await prisma.otpChallenge.upsert({
+            where: { customerId_partnerId: { customerId, partnerId } },
+            update: challenge,
+            create: { customerId, partnerId, ...challenge }
         });
 
         res.json({
@@ -726,7 +872,7 @@ app.post('/api/otp/generate', authenticateToken, async (req: Request, res: Respo
     }
 });
 
-app.post('/api/otp/verify', authenticateToken, async (req: Request, res: Response) => {
+app.post('/api/otp/verify', authenticateToken, otpLimiter, async (req: Request, res: Response) => {
     const authReq = req as AuthenticatedRequest;
 
     if (authReq.user.role !== 'PARTNER') {
@@ -736,38 +882,64 @@ app.post('/api/otp/verify', authenticateToken, async (req: Request, res: Respons
 
     const customerId = normalizeIdentifier(req.body.customerId);
     const otp = normalizeIdentifier(req.body.otp);
+    const partnerId = normalizePartnerId(authReq.user.bankId);
 
     if (!customerId || !/^\d{6}$/.test(otp)) {
         res.status(400).json({ error: 'Customer ID and a valid 6-digit OTP are required.' });
         return;
     }
 
-    const otpKey = makeOtpKey(customerId, authReq.user.bankId);
-    const record = otpStore.get(otpKey);
+    const otpWhere = { customerId_partnerId: { customerId, partnerId } };
+    const record = await prisma.otpChallenge.findUnique({ where: otpWhere });
 
     if (!record) {
+        await recordAccess({
+            customerId,
+            partnerId,
+            channel: 'OTP',
+            outcome: 'DENIED',
+            disclosureType: 'NONE',
+            reason: 'No active OTP challenge.'
+        });
         res.status(404).json({ error: 'No active OTP exists for this customer and partner.' });
         return;
     }
 
-    if (Date.now() > record.expiresAt) {
-        otpStore.delete(otpKey);
+    if (Date.now() > record.expiresAt.getTime()) {
+        await prisma.otpChallenge.delete({ where: otpWhere });
+        await recordAccess({
+            customerId,
+            partnerId,
+            channel: 'OTP',
+            outcome: 'DENIED',
+            disclosureType: 'NONE',
+            reason: 'OTP expired.'
+        });
         res.status(401).json({ error: 'OTP has expired. Ask the customer to generate a new one.' });
         return;
     }
 
-    const expectedHash = hashOtp(customerId, record.partnerId, otp, record.salt);
+    const expectedHash = hashOtp(customerId, partnerId, otp, record.salt);
     if (expectedHash !== record.otpHash) {
-        record.attemptsRemaining -= 1;
+        const attemptsRemaining = record.attemptsRemaining - 1;
 
-        if (record.attemptsRemaining <= 0) {
-            otpStore.delete(otpKey);
+        await recordAccess({
+            customerId,
+            partnerId,
+            channel: 'OTP',
+            outcome: 'DENIED',
+            disclosureType: 'NONE',
+            reason: 'Incorrect OTP.'
+        });
+
+        if (attemptsRemaining <= 0) {
+            await prisma.otpChallenge.delete({ where: otpWhere });
             res.status(429).json({ error: 'OTP verification attempts exhausted. Ask for a new OTP.' });
             return;
         }
 
-        otpStore.set(otpKey, record);
-        res.status(400).json({ error: `Invalid OTP. ${record.attemptsRemaining} attempts remaining.` });
+        await prisma.otpChallenge.update({ where: otpWhere, data: { attemptsRemaining } });
+        res.status(400).json({ error: `Invalid OTP. ${attemptsRemaining} attempts remaining.` });
         return;
     }
 
@@ -777,12 +949,30 @@ app.post('/api/otp/verify', authenticateToken, async (req: Request, res: Respons
             checkStatusOnChain(customerId, authReq.user.bankId)
         ]);
 
+        const disclosureType = normalizeDisclosureType(record.disclosureType);
+
         if (!customer) {
+            await recordAccess({
+                customerId,
+                partnerId,
+                channel: 'OTP',
+                outcome: 'DENIED',
+                disclosureType: 'NONE',
+                reason: 'Customer data not found in the vault.'
+            });
             res.status(404).json({ error: 'Customer data not found in the vault.' });
             return;
         }
 
         if (!status.isVerified) {
+            await recordAccess({
+                customerId,
+                partnerId,
+                channel: 'OTP',
+                outcome: 'DENIED',
+                disclosureType: 'NONE',
+                reason: 'No verified on-chain KYC proof found.'
+            });
             res.status(404).json({ error: 'No verified on-chain KYC proof found.' });
             return;
         }
@@ -791,6 +981,14 @@ app.post('/api/otp/verify', authenticateToken, async (req: Request, res: Respons
         const currentHash = `0x${hashData(decryptedString)}`.toLowerCase();
 
         if (currentHash !== status.payloadHash) {
+            await recordAccess({
+                customerId,
+                partnerId,
+                channel: 'OTP',
+                outcome: 'DENIED',
+                disclosureType: 'NONE',
+                reason: 'Data integrity verification failed.'
+            });
             res.status(500).json({ error: 'Data integrity verification failed.' });
             return;
         }
@@ -798,21 +996,28 @@ app.post('/api/otp/verify', authenticateToken, async (req: Request, res: Respons
         const fullPii = JSON.parse(decryptedString) as Record<string, string>;
         const filteredPii = { ...fullPii };
 
-        if (record.disclosureType === 'NAME_ONLY') {
+        if (disclosureType === 'NAME_ONLY') {
             filteredPii.govId = 'Hidden for privacy';
-        } else if (record.disclosureType === 'PROOF_OF_EXISTENCE') {
+        } else if (disclosureType === 'PROOF_OF_EXISTENCE') {
             filteredPii.fullName = 'Hidden';
             filteredPii.govId = 'Hidden';
             filteredPii.status = 'Verified identity on file';
         }
 
-        otpStore.delete(otpKey);
+        await prisma.otpChallenge.delete({ where: otpWhere });
+        await recordAccess({
+            customerId,
+            partnerId,
+            channel: 'OTP',
+            outcome: 'GRANTED',
+            disclosureType
+        });
 
         res.json({
             success: true,
             customerId,
             pii: filteredPii,
-            verifiedVia: `One-time password (${record.disclosureType})`,
+            verifiedVia: `One-time password (${disclosureType})`,
             verifiedAt: new Date(status.verifiedAt * 1000).toISOString(),
             issuedAt: new Date().toISOString()
         });
@@ -837,7 +1042,7 @@ app.delete('/api/kyc/forget', authenticateToken, async (req: Request, res: Respo
             return tx.customer.deleteMany({ where: { publicId: customerId } });
         });
 
-        clearOtpChallengesForCustomer(customerId);
+        await clearOtpChallengesForCustomer(customerId);
 
         if (deleted.count === 0) {
             res.status(404).json({ error: 'No data found to delete.' });

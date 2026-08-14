@@ -37,3 +37,40 @@ model BankUser {
   bankId       String   // e.g. "BANK_A", "BANK_B"
   role         String   // "VERIFIER", "PARTNER"
 }
+
+// Records every attempt to read a customer's PII, granted or denied.
+//
+// Deliberately NOT related to Customer: DPDP erasure removes the plaintext,
+// but RBI record-keeping expects the access history to survive. This table
+// holds only the pseudonymous publicId and never the data that was disclosed,
+// so it stays useful after erasure without becoming a second PII store.
+model AccessLog {
+  id             String   @id @default(uuid())
+  customerId     String // Customer.publicId — pseudonym, kept after erasure
+  partnerId      String
+  channel        String // "CONSENT" | "OTP"
+  outcome        String // "GRANTED" | "DENIED"
+  disclosureType String // "FULL" | "NAME_ONLY" | "PROOF_OF_EXISTENCE" | "NONE"
+  reason         String? // why access was denied
+  createdAt      DateTime @default(now())
+
+  @@index([customerId, createdAt])
+  @@index([partnerId, createdAt])
+}
+
+// OTP challenges live in the database, not process memory, so they survive
+// Cloud Run cold starts and work across horizontally scaled instances.
+model OtpChallenge {
+  id                String   @id @default(uuid())
+  customerId        String
+  partnerId         String
+  otpHash           String
+  salt              String
+  disclosureType    String   @default("FULL")
+  attemptsRemaining Int      @default(5)
+  expiresAt         DateTime
+  createdAt         DateTime @default(now())
+
+  @@unique([customerId, partnerId])
+  @@index([expiresAt])
+}

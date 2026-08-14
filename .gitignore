@@ -8,6 +8,7 @@ node_modules/
 # ─── Environment & Secrets ───
 .env
 .env.*
+!.env.example
 *.pem
 *.key
 gcp-key*.json
@@ -50,3 +51,12 @@ coverage/
 # ─── Cloud & Deployment ───
 .firebase/
 env.yaml
+
+# ─── AI / Agent Configs ───
+.claude/
+.codex/
+.agents/
+
+# ─── Misc generated files ───
+backend/supabase_setup.sql
+fable-5.py
