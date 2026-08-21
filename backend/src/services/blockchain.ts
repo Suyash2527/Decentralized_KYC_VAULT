@@ -1,4 +1,5 @@
 import { ethers } from 'ethers';
+import { KmsSigner } from './kmsSigner';
 
 const KYCVaultABI = [
     'function verifyKYC(string customerId, bytes32 payloadHash) external',
@@ -33,9 +34,45 @@ function getContractAddress(): string {
     return requireEnv('CONTRACT_ADDRESS');
 }
 
-function getSigner() {
-    const privateKey = requireEnv('DEPLOYER_PRIVATE_KEY');
-    return new ethers.Wallet(privateKey, provider);
+// The operator key lives in Cloud KMS and is never exported. If a raw private
+// key is still present in the environment (local development, or the window
+// between deploying this code and completing the operator handover) it is used
+// as a fallback and logged loudly, because it is the weaker configuration.
+let cachedSigner: ethers.Signer | null = null;
+let warnedAboutRawKey = false;
+
+function getSigner(): ethers.Signer {
+    if (cachedSigner) {
+        return cachedSigner;
+    }
+
+    const rawKey = process.env.DEPLOYER_PRIVATE_KEY;
+
+    if (process.env.KMS_SIGNING_KEY) {
+        cachedSigner = new KmsSigner(provider);
+        return cachedSigner;
+    }
+
+    if (!rawKey) {
+        throw new Error('Configure KMS_SIGNING_KEY (preferred) or DEPLOYER_PRIVATE_KEY.');
+    }
+
+    if (!warnedAboutRawKey) {
+        warnedAboutRawKey = true;
+        console.warn(
+            '[security] Signing with a raw DEPLOYER_PRIVATE_KEY from the environment. ' +
+            'This key is readable by anything that can read this process. ' +
+            'Set KMS_SIGNING_KEY to move signing into Cloud KMS.'
+        );
+    }
+
+    cachedSigner = new ethers.Wallet(rawKey, provider);
+    return cachedSigner;
+}
+
+/** Ethereum address of whatever signer is configured. Logged at boot. */
+export async function getOperatorAddress(): Promise<string> {
+    return getSigner().getAddress();
 }
 
 function getWriteContract() {
@@ -59,8 +96,8 @@ async function broadcast(
         const contract = getWriteContract();
 
         if (nextNonce === null) {
-            const signer = getSigner();
-            nextNonce = await provider.getTransactionCount(signer.address, 'pending');
+            const address = await getSigner().getAddress();
+            nextNonce = await provider.getTransactionCount(address, 'pending');
         }
 
         try {

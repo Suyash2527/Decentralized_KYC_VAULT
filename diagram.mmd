@@ -1,24 +1,61 @@
+%% Corrected flow. Two things the earlier version got wrong:
+%%   1. The customer never signs a transaction. Every on-chain write is
+%%      onlyOperator and is relayed by the backend on the customer's behalf.
+%%   2. Self-destruct is an off-chain database deletion. Nothing is erased
+%%      on-chain, because nothing on-chain can be erased.
 sequenceDiagram
-    participant U as User (Frontend)
-    participant B as Backend API (Cloud Run)
-    participant AI as Google Vision API
-    participant SC as Ethereum Smart Contract
-    
-    Note over U, SC: 1. Identity Onboarding
-    U->>B: Uploads ID Document & Details
-    B->>AI: Sends document for OCR Extraction
-    AI-->>B: Returns extracted text/validation
-    B->>SC: Writes Identity Hash to Blockchain
-    SC-->>U: Identity Verified & Anchored
-    
-    Note over U, SC: 2. Selective Disclosure & Consent
-    U->>SC: Grants targeted access to 3rd Party
-    SC-->>B: Access event recorded on-chain
-    
-    Note over U, SC: 3. Revocation & Self-Destruct
-    alt Manual Revocation
-        U->>SC: Revokes access (1-click)
-    else Auto-Expiry (Cron)
-        B->>SC: Triggers self-destruct function
+    autonumber
+    actor C as Customer
+    participant V as Verifier Bank
+    participant B as Backend API<br/>(Cloud Run)
+    participant K as Cloud KMS<br/>(HSM)
+    participant DB as Cloud SQL<br/>(encrypted PII)
+    participant SC as KYCVault.sol<br/>(Ethereum Sepolia)
+    actor P as Partner Bank
+
+    rect rgb(238, 246, 255)
+    Note over V, SC: 1 - Verification. The hash goes on-chain; the data never does.
+    V->>B: POST /api/kyc/verify { customerId, fullName, govId }
+    B->>K: Wrap a fresh 256-bit data key
+    K-->>B: Wrapped key
+    B->>DB: Store AES-256-GCM ciphertext
+    B->>B: payloadHash = SHA-256(plaintext PII)
+    B->>SC: verifyKYC(customerId, payloadHash)<br/>signed by the KMS operator key
+    SC-->>B: Tx hash + KYCVerified event
+    Note right of SC: On-chain now holds:<br/>hash, timestamp, verifier address.<br/>No name. No ID number.
     end
-    SC-->>U: Access permanently terminated
+
+    rect rgb(240, 250, 244)
+    Note over C, SC: 2 - Consent. The customer decides; the backend relays.
+    C->>B: POST /api/consent/grant { partnerId }
+    B->>SC: grantConsent(customerId, keccak256(partnerId))
+    SC-->>B: ConsentGranted event
+    end
+
+    rect rgb(255, 248, 237)
+    Note over P, SC: 3 - Access. The chain is the gatekeeper, not the database.
+    P->>B: GET /api/kyc/access/:customerId
+    B->>SC: checkStatus(customerId, partnerHash)
+    SC-->>B: (consentGranted, isVerified, payloadHash, verifiedAt)
+    alt No consent, or not verified
+        B-->>P: 403 - denied, and the attempt is logged
+    else Consent present
+        B->>K: Unwrap the data key
+        B->>DB: Read ciphertext, decrypt
+        B->>B: Recompute SHA-256 and compare with the on-chain hash
+        alt Hashes differ
+            B-->>P: 500 - the record was tampered with off-chain
+        else Hashes match
+            B-->>P: 200 - PII released
+        end
+    end
+    end
+
+    rect rgb(253, 242, 245)
+    Note over C, SC: 4 - Revocation and erasure
+    C->>B: POST /api/consent/revoke
+    B->>SC: revokeConsent(...)  - flag flipped to false, history retained
+    C->>B: DELETE /api/kyc/forget
+    B->>DB: Delete ciphertext, consents, OTP challenges
+    Note right of SC: The on-chain hash remains, now an orphan.<br/>It proves a verification happened;<br/>it cannot reconstruct what was verified.
+    end

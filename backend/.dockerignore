@@ -1,6 +1,11 @@
 node_modules
 dist
+.git
 .env
-Dockerfile
-.dockerignore
-npm-debug.log
+.env.*
+env.yaml
+*.json.json
+gcp-key*.json
+prisma/dev.db
+scripts
+**/*.test.ts

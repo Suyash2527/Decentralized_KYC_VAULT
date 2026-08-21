@@ -1,5 +1,6 @@
 import React from 'react';
-import { LogOut, ShieldCheck } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { Link2, LogOut, ShieldCheck } from 'lucide-react';
 import { CONTRACT_ADDRESS, EXPLORER_URL, NETWORK_NAME } from '../lib/api';
 import { ROLE_LABELS, truncateHash } from '../lib/format';
 import { IconButton } from './ui';
@@ -31,6 +32,14 @@ export function Nav({ user, onLogout }) {
         </div>
 
         <div className="flex items-center gap-3">
+          <Link
+            to="/chain"
+            className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-[color:var(--text-muted)] hover:text-[color:var(--primary)]"
+          >
+            <Link2 className="h-3.5 w-3.5" aria-hidden="true" />
+            <span className="hidden sm:inline">On-chain proof</span>
+          </Link>
+
           {CONTRACT_ADDRESS ? (
             <a
               href={`${EXPLORER_URL}/address/${CONTRACT_ADDRESS}`}

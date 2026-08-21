@@ -8,7 +8,9 @@ import multer from 'multer';
 import { PrismaClient } from '@prisma/client';
 import crypto from 'crypto';
 import { checkStatusOnChain, grantConsentOnChain, normalizePartnerId, revokeConsentOnChain, verifyKYCOnChain } from './services/blockchain';
-import { decrypt, encrypt, hashData } from './utils/crypto';
+import { hashData, openPII, sealPII } from './utils/crypto';
+import { assertKmsReachable } from './services/kms';
+import { getOperatorAddress } from './services/blockchain';
 import { hashPassword, verifyPassword } from './utils/password';
 
 type AppRole = 'VERIFIER' | 'CUSTOMER' | 'PARTNER';
@@ -475,13 +477,17 @@ app.post('/api/kyc/verify', authenticateToken, async (req: Request, res: Respons
     try {
         const piiPayload = JSON.stringify({ fullName, govId });
         const piiHash = hashData(piiPayload);
-        const encryptedPII = await encrypt(piiPayload);
+
+        // The customer's publicId is the encryption context: it binds this
+        // record's wrapped data key to this row, so a wrapped key copied onto
+        // another customer's row will not unwrap.
+        const { payload: encryptedPII, kmsKeyVersion } = await sealPII(piiPayload, customerId);
         const txHash = await verifyKYCOnChain(customerId, `0x${piiHash}`);
 
         await prisma.customer.upsert({
             where: { publicId: customerId },
-            update: { encryptedPII, piiHash, expiresAt: null },
-            create: { publicId: customerId, encryptedPII, piiHash }
+            update: { encryptedPII, piiHash, kmsKeyVersion, expiresAt: null },
+            create: { publicId: customerId, encryptedPII, piiHash, kmsKeyVersion }
         });
 
         res.json({ success: true, txHash, piiHash });
@@ -630,7 +636,7 @@ app.get('/api/kyc/access/:customerId', authenticateToken, async (req: Request, r
             return;
         }
 
-        const decryptedString = await decrypt(customer.encryptedPII);
+        const decryptedString = await openPII(customer.encryptedPII, customerId);
         const currentHash = `0x${hashData(decryptedString)}`.toLowerCase();
 
         if (currentHash !== status.payloadHash) {
@@ -685,7 +691,7 @@ app.get('/api/kyc/me', authenticateToken, async (req: Request, res: Response) =>
             prisma.consent.findMany({ where: { customerId }, orderBy: { updatedAt: 'desc' } })
         ]);
 
-        const decryptedString = await decrypt(customer.encryptedPII);
+        const decryptedString = await openPII(customer.encryptedPII, customerId);
         const currentHash = `0x${hashData(decryptedString)}`.toLowerCase();
 
         res.json({
@@ -977,7 +983,7 @@ app.post('/api/otp/verify', authenticateToken, otpLimiter, async (req: Request, 
             return;
         }
 
-        const decryptedString = await decrypt(customer.encryptedPII);
+        const decryptedString = await openPII(customer.encryptedPII, customerId);
         const currentHash = `0x${hashData(decryptedString)}`.toLowerCase();
 
         if (currentHash !== status.payloadHash) {
@@ -1113,6 +1119,35 @@ process.on('SIGTERM', async () => {
 });
 
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => {
-    console.log(`Backend running on port ${PORT}`);
+
+/**
+ * Prove the key material works before accepting traffic. A missing IAM binding
+ * or a typo'd key name should fail the deploy here, at startup, rather than
+ * surfacing as a 500 in front of a verifier holding a customer's documents.
+ */
+async function start(): Promise<void> {
+    if (process.env.KMS_PII_KEK) {
+        await assertKmsReachable();
+        console.log('[startup] Cloud KMS envelope encryption verified.');
+    } else if (process.env.NODE_ENV === 'production') {
+        throw new Error('KMS_PII_KEK is required in production; refusing to start with environment-variable encryption.');
+    } else {
+        console.warn('[security] KMS_PII_KEK is not set; falling back to legacy ENCRYPTION_KEY encryption.');
+    }
+
+    try {
+        console.log(`[startup] Ethereum operator address: ${await getOperatorAddress()}`);
+    } catch (error) {
+        console.error('[startup] Unable to resolve the operator signing key.', error);
+        throw error;
+    }
+
+    app.listen(PORT, () => {
+        console.log(`Backend running on port ${PORT}`);
+    });
+}
+
+start().catch((error) => {
+    console.error('[startup] Fatal error during startup.', error);
+    process.exit(1);
 });

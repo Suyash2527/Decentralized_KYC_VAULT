@@ -7,9 +7,12 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "prisma:generate": "prisma generate",
-    "prisma:push": "prisma db push"
+    "prisma:push": "prisma db push",
+    "backfill:encryption": "ts-node scripts/backfill-envelope.ts",
+    "kms:address": "ts-node scripts/kms-operator-address.ts"
   },
   "dependencies": {
+    "@google-cloud/kms": "^4.5.0",
     "@prisma/client": "^5.2.0",
     "@types/multer": "^2.2.0",
     "@types/qrcode": "^1.5.6",

@@ -1,0 +1,44 @@
+%% What actually lives where. This is the diagram to show when a judge asks
+%% "isn't putting identity on a blockchain a privacy disaster?"
+flowchart TB
+    subgraph CHAIN["ON-CHAIN - KYCVault.sol, public, permanent, unerasable"]
+        direction TB
+        H["payloadHash<br/><i>bytes32 - SHA-256 of the PII</i><br/>One-way. Cannot be reversed."]
+        T["verifiedAt<br/><i>uint256 - block timestamp</i>"]
+        VB["verifierBank<br/><i>address - who vouched</i>"]
+        CL["consentList<br/><i>customerId to keccak256(partnerId) to bool</i><br/>Even the partner's name is hashed."]
+    end
+
+    subgraph OFF["OFF-CHAIN - Cloud SQL, private, encrypted, erasable"]
+        direction TB
+        PII["Full name, government ID<br/><i>AES-256-GCM under a per-record key</i>"]
+        DEK["Wrapped data key<br/><i>unwrappable only by Cloud KMS HSM</i>"]
+        LOG["AccessLog<br/><i>who read what, when</i>"]
+        OTP["OTP challenges"]
+    end
+
+    NEVER["NEVER ANYWHERE ON-CHAIN<br/>names - ID numbers - dates of birth<br/>document images - partner identities in clear"]
+
+    PII -. "SHA-256, one-way" .-> H
+    DEK -. "wraps" .-> PII
+
+    CHAIN --> WHY
+
+    subgraph WHY["Why the chain earns its place"]
+        direction TB
+        W1["<b>Tamper-evidence</b><br/>A bank that quietly edits a customer's<br/>record breaks the hash comparison at<br/>access time. The database alone cannot<br/>catch its own administrator."]
+        W2["<b>An audit trail no one owns</b><br/>Consent history is not in a log file<br/>the operator could rewrite. It is in<br/>a ledger the operator cannot rewrite."]
+        W3["<b>Verify once, reuse everywhere</b><br/>Any bank can independently confirm a<br/>verification happened, without holding<br/>the underlying documents."]
+    end
+
+    OFF --> ERASE["<b>Right to be forgotten still works</b><br/>DPDP erasure deletes the off-chain plaintext.<br/>The on-chain hash survives as an orphan -<br/>proof that a verification occurred, with<br/>nothing left to reconstruct."]
+
+    classDef chain fill:#e8f0fe,stroke:#1a56db,stroke-width:2px,color:#0b2a5b
+    classDef off fill:#e9f7ef,stroke:#137a45,stroke-width:2px,color:#0a3d24
+    classDef never fill:#fdecec,stroke:#c0392b,stroke-width:2px,color:#7b1c14
+    classDef why fill:#fff8e6,stroke:#b7791f,stroke-width:1px,color:#5a3d0a
+
+    class H,T,VB,CL chain
+    class PII,DEK,LOG,OTP off
+    class NEVER never
+    class W1,W2,W3,ERASE why

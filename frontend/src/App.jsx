@@ -8,6 +8,7 @@ import { Auth } from './screens/Auth';
 import { VerifierDashboard } from './screens/VerifierDashboard';
 import { CustomerVault } from './screens/CustomerVault';
 import { PartnerConsole } from './screens/PartnerConsole';
+import { ChainProof } from './screens/ChainProof';
 
 function RequireRole({ role, children }) {
   const { token, user } = useAuth();
@@ -67,6 +68,9 @@ function Shell() {
               </RequireRole>
             }
           />
+          {/* Public on purpose: the on-chain record is public, and a reviewer
+              should be able to check it without an account. */}
+          <Route path="/chain" element={<ChainProof />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>

@@ -8,14 +8,22 @@ datasource db {
 }
 
 model Customer {
-  id             String   @id @default(uuid())
-  publicId       String   @unique // The ID shared with banks
-  encryptedPII   String   // AES-GCM encrypted payload
-  piiHash        String   // SHA-256 for integrity and linking to blockchain
-  expiresAt      DateTime? // Support for self-destructing identities
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
-  consents       Consent[]
+  id           String @id @default(uuid())
+  publicId     String @unique // The ID shared with banks
+  encryptedPII String // Envelope-encrypted payload: v2:<wrapped DEK>:<iv>:<tag>:<ciphertext>
+  piiHash      String // SHA-256 for integrity and linking to blockchain
+
+  // Cloud KMS key version that wrapped this record's data key. Not needed to
+  // decrypt (the wrapped DEK carries its own version) but it makes "which rows
+  // are still on the old key version" a query instead of a full scan, which is
+  // what rotation reporting and a key-compromise blast-radius answer need.
+  kmsKeyVersion String?
+  expiresAt DateTime? // Support for self-destructing identities
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  consents  Consent[]
+
+  @@index([kmsKeyVersion])
 }
 
 model Consent {

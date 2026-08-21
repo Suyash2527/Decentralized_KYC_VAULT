@@ -100,16 +100,35 @@ idbi/
 │   ├── src/
 │   │   ├── index.ts                 # Express server, all routes, JWT auth, rate limiting
 │   │   ├── services/
-│   │   │   └── blockchain.ts        # ethers.js contract calls, nonce queue
+│   │   │   ├── blockchain.ts        # ethers.js contract calls, nonce queue
+│   │   │   ├── kms.ts               # Cloud KMS client, DEK generate/wrap/unwrap
+│   │   │   └── kmsSigner.ts         # ethers v6 Signer backed by a KMS HSM key
 │   │   └── utils/
-│   │       ├── crypto.ts            # AES-256-GCM encrypt/decrypt, SHA-256 hash
+│   │       ├── crypto.ts            # Envelope encryption (per-record DEK + KMS KEK)
 │   │       └── password.ts          # scrypt hash and verify with timing-safe compare
 │   ├── prisma/
 │   │   └── schema.prisma            # Customer, Consent, BankUser, AccessLog, OtpChallenge
-│   ├── Dockerfile                   # node:18-slim, used for Cloud Run
+│   ├── scripts/
+│   │   ├── backfill-envelope.ts     # Re-encrypts pre-KMS rows under per-record DEKs
+│   │   └── kms-operator-address.ts  # Derives the Ethereum address of the KMS signing key
+│   ├── Dockerfile                   # Multi-stage, non-root, used for Cloud Run
 │   ├── .env.example
 │   ├── tsconfig.json
 │   └── package.json
+│
+├── infra/
+│   └── terraform/                  # Infrastructure as code
+│       ├── kms.tf                   # Keyring, PII KEK, secp256k1 signing key, CMEK keys
+│       ├── cloudsql.tf              # Private-IP Postgres, CMEK, IAM auth, PITR
+│       ├── cloudrun.tf              # Service + Cloud SQL Auth Proxy sidecar
+│       ├── network.tf               # VPC, private service access, VPC connector
+│       ├── secrets.tf               # Secret Manager under CMEK
+│       ├── iam.tf                   # Service accounts, least privilege, audit logs
+│       └── monitoring.tf            # Key-misuse and signing-rate alerts
+│
+├── docs/
+│   ├── SECURITY_ARCHITECTURE.md    # Key hierarchy and threat model
+│   └── KMS_RUNBOOK.md              # Cutover, rotation, incident response
 │
 └── frontend/                       # UI layer
     ├── src/
@@ -204,9 +223,15 @@ Then fill in the values. See the tables below for every variable.
 | `DATABASE_URL` | Yes | PostgreSQL connection string for Prisma |
 | `RPC_URL` | No | Ethereum JSON-RPC endpoint (defaults to `https://ethereum-sepolia-rpc.publicnode.com` in `blockchain.ts`, `http://127.0.0.1:8545` at runtime) |
 | `CONTRACT_ADDRESS` | Yes | Deployed `KYCVault` contract address |
-| `DEPLOYER_PRIVATE_KEY` | Yes | Private key of the operator wallet (must match the `operator` set at deploy time) |
-| `ENCRYPTION_KEY` | Yes | 64-char hex string (32 bytes) used as the AES-256-GCM key for PII encryption |
-| `ENCRYPTION_KEY_PREVIOUS` | No | Previous encryption key; if set, decryption tries both keys to support rotation |
+| `GCP_PROJECT_ID` | Yes | Project holding the KMS keyring |
+| `KMS_LOCATION` | Yes | KMS location, e.g. `asia-south1` |
+| `KMS_KEY_RING` | Yes | Keyring name from `terraform output` |
+| `KMS_PII_KEK` | Yes | Symmetric key that wraps per-record data keys. The server refuses to start in production without it |
+| `KMS_SIGNING_KEY` | Yes | Asymmetric secp256k1 key holding the Ethereum operator identity |
+| `KMS_SIGNING_KEY_VERSION` | No | Key version to sign with (defaults to `1`) |
+| `DEPLOYER_PRIVATE_KEY` | No | Legacy raw operator key. Used only if `KMS_SIGNING_KEY` is unset, and logs a warning when it is |
+| `ENCRYPTION_KEY` | No | Legacy PII key. Needed only during the migration window, to read pre-KMS rows |
+| `ENCRYPTION_KEY_PREVIOUS` | No | Second legacy key, same purpose |
 | `JWT_SECRET` | Yes | Secret for signing/verifying JWTs; the server throws at boot if this is empty |
 | `GCP_API_KEY` | No | Google Cloud Vision API key; the `/api/ocr/extract` route returns 503 if unset |
 | `CORS_ORIGIN` | No | Comma-separated allowed origins; if unset, CORS is open |
@@ -386,7 +411,7 @@ The backend serializes all contract writes through a promise queue with local no
 
 | Concern | Mitigation |
 |---|---|
-| **PII at rest** | AES-256-GCM encryption in the application layer. The key is a 32-byte hex value from `ENCRYPTION_KEY`. Key rotation is supported via `ENCRYPTION_KEY_PREVIOUS`. |
+| **PII at rest** | Envelope encryption. A unique 256-bit data key per record encrypts the PII with AES-256-GCM; that data key is wrapped by an HSM-backed Cloud KMS key (`pii-kek`) using the customer's `publicId` as Additional Authenticated Data. KMS never sees plaintext PII, no long-lived key sits in process memory, the KEK auto-rotates every 90 days, and every decryption is recorded in Cloud Audit Logs. |
 | **PII in transit** | HTTPS (TLS terminated by the hosting layer). Helmet sets security headers. |
 | **Password storage** | scrypt with 16-byte random salt, 64-byte derived key, timing-safe comparison. Legacy plain-text passwords are auto-rehashed on successful login. |
 | **Unauthorized data access** | Backend checks on-chain consent via `checkStatus` before returning PII. OTP path verifies a HMAC'd challenge with attempt limits (5) and expiry (5 min). |
@@ -397,10 +422,13 @@ The backend serializes all contract writes through a promise queue with local no
 | **Self-destruct timer** | Customers can set an expiry (0–10080 minutes) on their record. A 60-second background sweep deletes expired records. |
 | **Credential exposure** | `.gitignore` excludes `.env` files, `node_modules`, and build artifacts. |
 
+| **Operator signing key** | An `EC_SIGN_SECP256K1_SHA256` key generated inside a Cloud KMS HSM. It is non-exportable: there is no plaintext copy anywhere. A compromised runtime can request signatures (rate-alerted) but cannot steal the key, so the blast radius ends when the breach is closed. |
+| **Database** | Cloud SQL for PostgreSQL with no public IP, reached over private VPC peering. Authentication is Cloud SQL IAM auth via the Auth Proxy - no database password exists. Data, backups and WAL are encrypted with a customer-managed KMS key. |
+| **Application secrets** | Secret Manager under CMEK, generated by Terraform and mounted by reference into Cloud Run, so values never appear in service config or deployment history. |
+
 ### Honest limitations of the security model
 
-- The `ENCRYPTION_KEY` and `DEPLOYER_PRIVATE_KEY` are environment variables, not managed by a KMS. A compromised runtime can read them.
-- The single operator wallet signs every on-chain transaction; there is no multi-sig or per-user signing.
+- The single operator key signs every on-chain transaction; there is no multi-sig or per-user signing. It is now unstealable, but it is still a single point of authorization.
 - Rate limiting is per-IP. Cloud Run behind a load balancer requires `trust proxy` (set to `1`).
 - The `AccessLog` table deliberately survives customer erasure (it stores only the pseudonymous `publicId`, not PII) to satisfy audit requirements, but this is a design trade-off.
 - The OCR extraction uses heuristics and may misidentify names or IDs on non-standard documents.
@@ -409,7 +437,6 @@ The backend serializes all contract writes through a promise queue with local no
 
 ## Known Limitations / Roadmap
 
-- **KMS integration** — Move `ENCRYPTION_KEY` and `DEPLOYER_PRIVATE_KEY` to Google Cloud KMS or similar.
 - **Zero-Knowledge Proofs** — Replace full PII disclosure with zk-SNARKs (e.g., prove age >= 18 without revealing DOB). The `PROOF_OF_EXISTENCE` disclosure type is a manual approximation, not a cryptographic proof.
 - **Re-verification** — `verifyKYC` reverts if a proof already exists (`"KYC already verified"`). There is no update or re-verification path on-chain.
 - **Production chain** — Migrate from Sepolia testnet to a production EVM chain.

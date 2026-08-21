@@ -1,0 +1,14 @@
+project_id       = "kycvault-prod"
+region           = "asia-south1"
+environment      = "prod"
+contract_address = "0xYOUR_REDEPLOYED_CONTRACT_ADDRESS"
+cors_origin      = "https://idbi-kyc-vault.web.app"
+rpc_url          = "https://ethereum-sepolia-rpc.publicnode.com"
+backend_image    = "asia-south1-docker.pkg.dev/kycvault-prod/kycvault-prod-images/backend@sha256:REPLACE_WITH_DIGEST"
+alert_email      = "security@example.com"
+
+# Non-prod overrides worth knowing about:
+# db_availability_type   = "ZONAL"
+# db_deletion_protection = false
+# kms_protection_level   = "SOFTWARE"
+# min_instances          = 0
